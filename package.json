@@ -1,0 +1,67 @@
+{
+  "name": "bb-sequencer",
+  "version": "1.0.0",
+  "description": "3D Binaural Audio Sequencer combining DAW timeline and MMD keyframe 3D audio spatialization",
+  "main": "dist-electron/main.js",
+  "type": "module",
+  "scripts": {
+    "dev:renderer": "vite",
+    "dev:electron": "node scripts/dev.js",
+    "dev": "node scripts/dev.js",
+    "build:electron": "esbuild electron/main.ts --platform=node --outfile=dist-electron/main.js --format=esm --target=node20 --bundle --external:electron && esbuild electron/preload.ts --platform=node --outfile=dist-electron/preload.cjs --format=cjs --target=node20 --bundle --external:electron",
+    "build:renderer": "tsc && vite build",
+    "build": "npm run build:electron && npm run build:renderer",
+    "test": "esbuild test/engine.test.js --bundle --platform=node --outfile=dist-test.cjs && node dist-test.cjs && esbuild test/sofa_convolution.test.js --bundle --platform=node --outfile=dist-sofa-test.cjs && node dist-sofa-test.cjs",
+    "package": "npm run build && electron-packager . BinauralEditor --platform=win32 --arch=x64 --out=release --overwrite --ignore=\"^(src|electron|scripts|test|\\.git|node_modules|\\.system_generated)\"",
+    "dist": "npm run build && electron-packager . BinauralEditor --platform=win32 --arch=x64 --out=release --overwrite --ignore=\"^(src|electron|scripts|test|\\.git|node_modules|\\.system_generated)\"",
+    "start": "electron ."
+  },
+  "build": {
+    "appId": "com.binauraleditor.app",
+    "productName": "Binaural Editor",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
+  "overrides": {
+    "@noble/hashes": "1.4.0"
+  },
+  "dependencies": {
+    "lucide-react": "^1.16.0",
+    "netcdfjs": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^18.4.4",
+    "@types/node": "^20.16.5",
+    "@types/react": "^18.3.10",
+    "@types/react-dom": "^18.3.0",
+    "@types/three": "^0.170.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "autoprefixer": "^10.4.20",
+    "cross-env": "^7.0.3",
+    "electron": "^32.1.2",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.24.0",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8"
+  }
+}
