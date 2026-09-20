@@ -28,7 +28,7 @@ export class AudioEngine {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     this.ctx = new AudioCtx({ latencyHint: 'interactive' });
 
-    // Set listener at origin facing forward +Z
+    // Set listener at origin facing forward -Z (matching 3D scene dummy head)
     const listener = this.ctx.listener;
     if (listener.positionX) {
       listener.positionX.setValueAtTime(0, this.ctx.currentTime);
@@ -36,14 +36,14 @@ export class AudioEngine {
       listener.positionZ.setValueAtTime(0, this.ctx.currentTime);
       listener.forwardX.setValueAtTime(0, this.ctx.currentTime);
       listener.forwardY.setValueAtTime(0, this.ctx.currentTime);
-      listener.forwardZ.setValueAtTime(1, this.ctx.currentTime);
+      listener.forwardZ.setValueAtTime(-1, this.ctx.currentTime);
       listener.upX.setValueAtTime(0, this.ctx.currentTime);
       listener.upY.setValueAtTime(1, this.ctx.currentTime);
       listener.upZ.setValueAtTime(0, this.ctx.currentTime);
     } else {
       // Legacy fallback
       listener.setPosition(0, 0, 0);
-      listener.setOrientation(0, 0, 1, 0, 1, 0);
+      listener.setOrientation(0, 0, -1, 0, 1, 0);
     }
 
     this.masterGain = this.ctx.createGain();

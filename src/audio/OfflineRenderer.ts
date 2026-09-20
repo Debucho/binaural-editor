@@ -21,7 +21,7 @@ export async function renderBinauralAudioOffline(
 
   const offlineCtx = new OfflineAudioContext(2, totalLengthSamples, sampleRate);
 
-  // Set listener
+  // Set listener facing -Z (matching 3D scene dummy head)
   const listener = offlineCtx.listener;
   if (listener.positionX) {
     listener.positionX.setValueAtTime(0, 0);
@@ -29,13 +29,13 @@ export async function renderBinauralAudioOffline(
     listener.positionZ.setValueAtTime(0, 0);
     listener.forwardX.setValueAtTime(0, 0);
     listener.forwardY.setValueAtTime(0, 0);
-    listener.forwardZ.setValueAtTime(1, 0);
+    listener.forwardZ.setValueAtTime(-1, 0);
     listener.upX.setValueAtTime(0, 0);
     listener.upY.setValueAtTime(1, 0);
     listener.upZ.setValueAtTime(0, 0);
   } else {
     listener.setPosition(0, 0, 0);
-    listener.setOrientation(0, 0, 1, 0, 1, 0);
+    listener.setOrientation(0, 0, -1, 0, 1, 0);
   }
 
   const hasSolo = tracks.some((t) => t.solo);
