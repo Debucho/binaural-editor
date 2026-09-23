@@ -26,21 +26,103 @@ export const KeyframeEditor: React.FC = () => {
     }
   };
 
-  // Seeking playhead via click on frame ruler
-  const [isScrubbing, setIsScrubbing] = useState(false);
-
-  const handleRulerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    setIsScrubbing(true);
-    seekFromEvent(e);
+  const handleRulerWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (gridScrollRef.current) {
+      gridScrollRef.current.scrollLeft += e.deltaX || e.deltaY;
+    }
   };
 
-  const seekFromEvent = (e: React.MouseEvent<HTMLDivElement> | MouseEvent) => {
-    if (!rulerScrollRef.current) return;
-    const rect = rulerScrollRef.current.getBoundingClientRect();
-    const scrollLeft = rulerScrollRef.current.scrollLeft;
+  // Smart Anchor Zoom for Keyframe Editor
+  const handleZoomChange = (newPxPerFrame: number) => {
+    if (!gridScrollRef.current) {
+      setPxPerFrame(newPxPerFrame);
+      return;
+    }
+
+    const grid = gridScrollRef.current;
+    const viewportWidth = grid.clientWidth;
+    const oldPlayheadPx = currentFrame * pxPerFrame;
+    const currentScrollLeft = grid.scrollLeft;
+    const offsetFromScroll = oldPlayheadPx - currentScrollLeft;
+
+    let relativeRatio = 0.5;
+    if (offsetFromScroll >= 0 && offsetFromScroll <= viewportWidth) {
+      relativeRatio = offsetFromScroll / viewportWidth;
+    }
+
+    const newPlayheadPx = currentFrame * newPxPerFrame;
+    const newScrollLeft = Math.max(
+      0,
+      Math.min(
+        project.totalFrames * newPxPerFrame - viewportWidth,
+        newPlayheadPx - viewportWidth * relativeRatio
+      )
+    );
+
+    setPxPerFrame(newPxPerFrame);
+
+    requestAnimationFrame(() => {
+      if (gridScrollRef.current) {
+        gridScrollRef.current.scrollLeft = newScrollLeft;
+      }
+      if (rulerScrollRef.current) {
+        rulerScrollRef.current.scrollLeft = newScrollLeft;
+      }
+    });
+  };
+
+  // Auto-scroll keyframe editor during playback
+  useEffect(() => {
+    const isPlaying = projectStore.getState().isPlaying;
+    if (!isPlaying) return;
+    if (!gridScrollRef.current) return;
+
+    const grid = gridScrollRef.current;
+    const playheadPx = currentFrame * pxPerFrame;
+    const viewportWidth = grid.clientWidth;
+    const scrollLeft = grid.scrollLeft;
+
+    if (playheadPx > scrollLeft + viewportWidth * 0.85) {
+      const targetScroll = Math.max(0, playheadPx - viewportWidth * 0.2);
+      grid.scrollLeft = targetScroll;
+      if (rulerScrollRef.current) {
+        rulerScrollRef.current.scrollLeft = targetScroll;
+      }
+    } else if (playheadPx < scrollLeft) {
+      const targetScroll = Math.max(0, playheadPx - viewportWidth * 0.1);
+      grid.scrollLeft = targetScroll;
+      if (rulerScrollRef.current) {
+        rulerScrollRef.current.scrollLeft = targetScroll;
+      }
+    }
+  }, [currentFrame, pxPerFrame]);
+
+  // Seeking playhead via click on frame ruler or grid rows
+  const [isScrubbing, setIsScrubbing] = useState(false);
+
+  const seekFromEvent = (
+    e: React.MouseEvent<HTMLDivElement> | MouseEvent,
+    containerOverride?: HTMLDivElement | null
+  ) => {
+    const container = containerOverride || rulerScrollRef.current || gridScrollRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const scrollLeft = container.scrollLeft;
     const offsetX = e.clientX - rect.left + scrollLeft;
     const targetFrame = Math.max(0, Math.min(project.totalFrames, Math.round(offsetX / pxPerFrame)));
     projectStore.seekToFrame(targetFrame);
+  };
+
+  const handleRulerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    setIsScrubbing(true);
+    seekFromEvent(e, rulerScrollRef.current);
+  };
+
+  const handleGridMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('input')) return;
+    setIsScrubbing(true);
+    seekFromEvent(e, gridScrollRef.current);
   };
 
   useEffect(() => {
@@ -160,11 +242,11 @@ export const KeyframeEditor: React.FC = () => {
             <span>Zoom:</span>
             <input
               type="range"
-              min="4"
+              min="2"
               max="20"
               step="1"
               value={pxPerFrame}
-              onChange={(e) => setPxPerFrame(parseFloat(e.target.value))}
+              onChange={(e) => handleZoomChange(parseFloat(e.target.value))}
               className="w-16 h-1 bg-dark-700 rounded appearance-none cursor-pointer accent-amber-400"
             />
           </div>
@@ -247,30 +329,44 @@ export const KeyframeEditor: React.FC = () => {
           <div
             ref={rulerScrollRef}
             onMouseDown={handleRulerMouseDown}
+            onWheel={handleRulerWheel}
             className="h-6 border-b border-dark-700 bg-dark-800 overflow-x-hidden relative cursor-pointer select-none"
           >
             <div className="h-full relative" style={{ width: `${totalWidth}px` }}>
-              {/* Frame Numbers (0, 5, 10, 15, ...) */}
-              {Array.from({ length: Math.ceil(project.totalFrames / 5) }).map((_, i) => {
-                const frameNum = i * 5;
-                const isMajor = frameNum % (project.fps === 60 ? 30 : 15) === 0;
-                return (
-                  <div
-                    key={frameNum}
-                    className={`absolute top-0 bottom-0 border-l ${
-                      isMajor ? 'border-slate-500 text-slate-200 font-bold' : 'border-dark-650 text-slate-500'
-                    } pl-1 text-[9px] font-mono pointer-events-none flex items-center`}
-                    style={{ left: `${frameNum * pxPerFrame}px` }}
-                  >
-                    {frameNum}
-                  </div>
-                );
-              })}
+              {/* Frame Numbers with dynamic steps */}
+              {(() => {
+                let step = 5;
+                if (pxPerFrame < 4) step = 30;
+                else if (pxPerFrame < 8) step = 15;
+                else step = 5;
 
-              {/* Playhead marker indicator on ruler */}
+                const majorStep = step * 3;
+                const count = Math.ceil(project.totalFrames / step);
+                return Array.from({ length: count + 1 }).map((_, i) => {
+                  const frameNum = i * step;
+                  if (frameNum > project.totalFrames) return null;
+                  const isMajor = frameNum % majorStep === 0;
+                  return (
+                    <div
+                      key={frameNum}
+                      className={`absolute top-0 bottom-0 border-l ${
+                        isMajor ? 'border-slate-500 text-slate-200 font-bold' : 'border-dark-650 text-slate-500'
+                      } pl-1 text-[9px] font-mono pointer-events-none flex items-center`}
+                      style={{ left: `${frameNum * pxPerFrame}px` }}
+                    >
+                      {frameNum}
+                    </div>
+                  );
+                });
+              })()}
+
+              {/* Playhead marker indicator on ruler (Centered with translateX(-50%)) */}
               <div
-                className="absolute top-0 bottom-0 w-3 -ml-1.5 pointer-events-none z-30 flex flex-col items-center"
-                style={{ left: `${currentFrame * pxPerFrame}px` }}
+                className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col items-center"
+                style={{
+                  left: `${currentFrame * pxPerFrame}px`,
+                  transform: 'translateX(-50%)',
+                }}
               >
                 <div className="w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-t-[6px] border-t-amber-400" />
               </div>
@@ -281,28 +377,42 @@ export const KeyframeEditor: React.FC = () => {
           <div
             ref={gridScrollRef}
             onScroll={handleScroll}
-            className="flex-1 overflow-x-auto overflow-y-hidden relative bg-studio-timeline divide-y divide-dark-750"
+            onMouseDown={handleGridMouseDown}
+            className="flex-1 overflow-x-auto overflow-y-hidden relative bg-studio-timeline divide-y divide-dark-750 cursor-pointer"
           >
             <div className="relative h-full" style={{ width: `${totalWidth}px` }}>
-              {/* Vertical Frame Grid Lines */}
-              {Array.from({ length: Math.ceil(project.totalFrames / 5) }).map((_, i) => {
-                const frameNum = i * 5;
-                const isMajor = frameNum % (project.fps === 60 ? 30 : 15) === 0;
-                return (
-                  <div
-                    key={frameNum}
-                    className={`absolute top-0 bottom-0 border-l ${
-                      isMajor ? 'border-dark-600/70' : 'border-dark-750/50'
-                    } pointer-events-none`}
-                    style={{ left: `${frameNum * pxPerFrame}px` }}
-                  ></div>
-                );
-              })}
+              {/* Vertical Frame Grid Lines matching ruler steps */}
+              {(() => {
+                let step = 5;
+                if (pxPerFrame < 4) step = 30;
+                else if (pxPerFrame < 8) step = 15;
+                else step = 5;
 
-              {/* Global Playhead Vertical Line */}
+                const majorStep = step * 3;
+                const count = Math.ceil(project.totalFrames / step);
+                return Array.from({ length: count + 1 }).map((_, i) => {
+                  const frameNum = i * step;
+                  if (frameNum > project.totalFrames) return null;
+                  const isMajor = frameNum % majorStep === 0;
+                  return (
+                    <div
+                      key={frameNum}
+                      className={`absolute top-0 bottom-0 border-l ${
+                        isMajor ? 'border-dark-600/70' : 'border-dark-750/50'
+                      } pointer-events-none`}
+                      style={{ left: `${frameNum * pxPerFrame}px` }}
+                    />
+                  );
+                });
+              })()}
+
+              {/* Global Playhead Vertical Line (Centered with translateX(-50%)) */}
               <div
                 className="absolute top-0 bottom-0 w-[2px] bg-amber-400 pointer-events-none z-20 shadow-[0_0_8px_rgba(251,191,36,0.8)]"
-                style={{ left: `${currentFrame * pxPerFrame}px` }}
+                style={{
+                  left: `${currentFrame * pxPerFrame}px`,
+                  transform: 'translateX(-50%)',
+                }}
               />
 
               {/* Row 1: Master Diamonds */}

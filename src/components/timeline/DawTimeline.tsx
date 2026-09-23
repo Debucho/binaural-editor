@@ -38,21 +38,103 @@ export const DawTimeline: React.FC = () => {
     }
   };
 
-  // Seeking via ruler click / drag
-  const [isScrubbing, setIsScrubbing] = useState(false);
-
-  const handleRulerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    setIsScrubbing(true);
-    seekFromMouseEvent(e);
+  const handleRulerWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (lanesScrollRef.current) {
+      lanesScrollRef.current.scrollLeft += e.deltaX || e.deltaY;
+    }
   };
 
-  const seekFromMouseEvent = (e: React.MouseEvent<HTMLDivElement> | MouseEvent) => {
-    if (!rulerRef.current) return;
-    const rect = rulerRef.current.getBoundingClientRect();
-    const scrollLeft = rulerRef.current.scrollLeft;
+  // Smart Anchor Zoom: keep current playhead pinned at relative viewport position
+  const handleZoomChange = (newPxPerFrame: number) => {
+    if (!lanesScrollRef.current) {
+      setPxPerFrame(newPxPerFrame);
+      return;
+    }
+
+    const lanes = lanesScrollRef.current;
+    const viewportWidth = lanes.clientWidth;
+    const oldPlayheadPx = currentFrame * pxPerFrame;
+    const currentScrollLeft = lanes.scrollLeft;
+    const offsetFromScroll = oldPlayheadPx - currentScrollLeft;
+
+    let relativeRatio = 0.5;
+    if (offsetFromScroll >= 0 && offsetFromScroll <= viewportWidth) {
+      relativeRatio = offsetFromScroll / viewportWidth;
+    }
+
+    const newPlayheadPx = currentFrame * newPxPerFrame;
+    const newScrollLeft = Math.max(
+      0,
+      Math.min(
+        project.totalFrames * newPxPerFrame - viewportWidth,
+        newPlayheadPx - viewportWidth * relativeRatio
+      )
+    );
+
+    setPxPerFrame(newPxPerFrame);
+
+    requestAnimationFrame(() => {
+      if (lanesScrollRef.current) {
+        lanesScrollRef.current.scrollLeft = newScrollLeft;
+      }
+      if (rulerRef.current) {
+        rulerRef.current.scrollLeft = newScrollLeft;
+      }
+    });
+  };
+
+  // Auto-scroll timeline while playing so playhead stays in view
+  useEffect(() => {
+    const isPlaying = projectStore.getState().isPlaying;
+    if (!isPlaying) return;
+    if (!lanesScrollRef.current) return;
+
+    const lanes = lanesScrollRef.current;
+    const playheadPx = currentFrame * pxPerFrame;
+    const viewportWidth = lanes.clientWidth;
+    const scrollLeft = lanes.scrollLeft;
+
+    if (playheadPx > scrollLeft + viewportWidth * 0.85) {
+      const targetScroll = Math.max(0, playheadPx - viewportWidth * 0.2);
+      lanes.scrollLeft = targetScroll;
+      if (rulerRef.current) {
+        rulerRef.current.scrollLeft = targetScroll;
+      }
+    } else if (playheadPx < scrollLeft) {
+      const targetScroll = Math.max(0, playheadPx - viewportWidth * 0.1);
+      lanes.scrollLeft = targetScroll;
+      if (rulerRef.current) {
+        rulerRef.current.scrollLeft = targetScroll;
+      }
+    }
+  }, [currentFrame, pxPerFrame]);
+
+  // Seeking via ruler or lane click / drag
+  const [isScrubbing, setIsScrubbing] = useState(false);
+
+  const seekFromMouseEvent = (
+    e: React.MouseEvent<HTMLDivElement> | MouseEvent,
+    containerOverride?: HTMLDivElement | null
+  ) => {
+    const container = containerOverride || rulerRef.current || lanesScrollRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const scrollLeft = container.scrollLeft;
     const offsetX = e.clientX - rect.left + scrollLeft;
     const targetFrame = Math.max(0, Math.min(project.totalFrames, Math.round(offsetX / pxPerFrame)));
     projectStore.seekToFrame(targetFrame);
+  };
+
+  const handleRulerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    setIsScrubbing(true);
+    seekFromMouseEvent(e, rulerRef.current);
+  };
+
+  const handleLanesMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('input')) return;
+    setIsScrubbing(true);
+    seekFromMouseEvent(e, lanesScrollRef.current);
   };
 
   useEffect(() => {
@@ -179,12 +261,12 @@ export const DawTimeline: React.FC = () => {
             <span>Zoom:</span>
             <input
               type="range"
-              min="1.5"
+              min="0.5"
               max="10"
-              step="0.5"
+              step="0.25"
               value={pxPerFrame}
-              onChange={(e) => setPxPerFrame(parseFloat(e.target.value))}
-              className="w-14 h-1 bg-dark-700 rounded appearance-none cursor-pointer accent-studio-accent"
+              onChange={(e) => handleZoomChange(parseFloat(e.target.value))}
+              className="w-16 h-1 bg-dark-700 rounded appearance-none cursor-pointer accent-studio-accent"
             />
           </div>
 
@@ -427,6 +509,7 @@ export const DawTimeline: React.FC = () => {
           <div
             ref={rulerRef}
             onMouseDown={handleRulerMouseDown}
+            onWheel={handleRulerWheel}
             className="h-8 border-b border-dark-700 bg-dark-800 overflow-x-hidden relative cursor-pointer select-none"
           >
             <div className="h-full relative" style={{ width: `${totalWidth}px` }}>
@@ -447,21 +530,51 @@ export const DawTimeline: React.FC = () => {
                 )}
               </div>
 
-              {/* Frame & Second Tick Marks */}
-              {Array.from({ length: Math.ceil(project.totalFrames / 15) }).map((_, i) => {
-                const frameNum = i * 15;
-                const sec = (frameNum / project.fps).toFixed(1);
-                const isSecond = frameNum % project.fps === 0;
-                return (
-                  <div
-                    key={frameNum}
-                    className="absolute top-0 bottom-0 border-l border-dark-600 flex flex-col justify-end pb-0.5 pl-1 text-[9px] font-mono text-slate-400 pointer-events-none"
-                    style={{ left: `${frameNum * pxPerFrame}px` }}
-                  >
-                    {isSecond ? `${sec}s (F:${frameNum})` : ''}
-                  </div>
-                );
-              })}
+              {/* Dynamic Frame & Second Tick Marks */}
+              {(() => {
+                const pxPerSec = pxPerFrame * project.fps;
+                let frameStep = 15;
+                let majorFrameStep = 30;
+
+                if (pxPerSec >= 200) {
+                  frameStep = Math.max(1, Math.round(project.fps / 4));
+                  majorFrameStep = project.fps;
+                } else if (pxPerSec >= 100) {
+                  frameStep = Math.max(1, Math.round(project.fps / 2));
+                  majorFrameStep = project.fps;
+                } else if (pxPerSec >= 50) {
+                  frameStep = project.fps;
+                  majorFrameStep = project.fps * 2;
+                } else if (pxPerSec >= 20) {
+                  frameStep = project.fps * 2;
+                  majorFrameStep = project.fps * 5;
+                } else if (pxPerSec >= 8) {
+                  frameStep = project.fps * 5;
+                  majorFrameStep = project.fps * 15;
+                } else {
+                  frameStep = project.fps * 15;
+                  majorFrameStep = project.fps * 30;
+                }
+
+                const count = Math.ceil(project.totalFrames / frameStep);
+                return Array.from({ length: count + 1 }).map((_, i) => {
+                  const frameNum = i * frameStep;
+                  if (frameNum > project.totalFrames) return null;
+                  const isMajor = frameNum % majorFrameStep === 0;
+                  const sec = (frameNum / project.fps).toFixed(isMajor ? 0 : 1);
+                  return (
+                    <div
+                      key={frameNum}
+                      className={`absolute top-0 bottom-0 border-l ${
+                        isMajor ? 'border-dark-500 text-slate-300 font-semibold' : 'border-dark-650 text-slate-500'
+                      } flex flex-col justify-end pb-0.5 pl-1 text-[9px] font-mono pointer-events-none`}
+                      style={{ left: `${frameNum * pxPerFrame}px` }}
+                    >
+                      {isMajor ? `${sec}s` : (pxPerSec >= 80 ? `${sec}s` : '')}
+                    </div>
+                  );
+                });
+              })()}
 
               {/* Loop Region Highlight */}
               {project.loop.enabled && (
@@ -474,10 +587,13 @@ export const DawTimeline: React.FC = () => {
                 />
               )}
 
-              {/* Ruler Playhead marker */}
+              {/* Ruler Playhead marker (Centered with translateX(-50%)) */}
               <div
-                className="absolute top-0 bottom-0 w-3 -ml-1.5 pointer-events-none z-30 flex flex-col items-center"
-                style={{ left: `${currentFrame * pxPerFrame}px` }}
+                className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col items-center"
+                style={{
+                  left: `${currentFrame * pxPerFrame}px`,
+                  transform: 'translateX(-50%)',
+                }}
               >
                 <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[8px] border-t-red-500" />
               </div>
@@ -488,22 +604,60 @@ export const DawTimeline: React.FC = () => {
           <div
             ref={lanesScrollRef}
             onScroll={handleScroll}
-            className="flex-1 overflow-x-auto overflow-y-auto relative divide-y divide-dark-750 bg-studio-timeline"
+            onMouseDown={handleLanesMouseDown}
+            className="flex-1 overflow-x-auto overflow-y-auto relative divide-y divide-dark-750 bg-studio-timeline cursor-pointer"
           >
             <div className="relative" style={{ width: `${totalWidth}px`, minHeight: '100%' }}>
-              {/* Background Frame Grid lines */}
-              {Array.from({ length: Math.ceil(project.totalFrames / 30) }).map((_, i) => (
-                <div
-                  key={i}
-                  className="absolute top-0 bottom-0 border-l border-dark-750/70 pointer-events-none"
-                  style={{ left: `${i * 30 * pxPerFrame}px` }}
-                />
-              ))}
+              {/* Background Frame Grid lines matching ticks */}
+              {(() => {
+                const pxPerSec = pxPerFrame * project.fps;
+                let frameStep = 15;
+                let majorFrameStep = 30;
 
-              {/* Global Playhead Vertical Line */}
+                if (pxPerSec >= 200) {
+                  frameStep = Math.max(1, Math.round(project.fps / 4));
+                  majorFrameStep = project.fps;
+                } else if (pxPerSec >= 100) {
+                  frameStep = Math.max(1, Math.round(project.fps / 2));
+                  majorFrameStep = project.fps;
+                } else if (pxPerSec >= 50) {
+                  frameStep = project.fps;
+                  majorFrameStep = project.fps * 2;
+                } else if (pxPerSec >= 20) {
+                  frameStep = project.fps * 2;
+                  majorFrameStep = project.fps * 5;
+                } else if (pxPerSec >= 8) {
+                  frameStep = project.fps * 5;
+                  majorFrameStep = project.fps * 15;
+                } else {
+                  frameStep = project.fps * 15;
+                  majorFrameStep = project.fps * 30;
+                }
+
+                const count = Math.ceil(project.totalFrames / frameStep);
+                return Array.from({ length: count + 1 }).map((_, i) => {
+                  const frameNum = i * frameStep;
+                  if (frameNum > project.totalFrames) return null;
+                  const isMajor = frameNum % majorFrameStep === 0;
+                  return (
+                    <div
+                      key={frameNum}
+                      className={`absolute top-0 bottom-0 border-l ${
+                        isMajor ? 'border-dark-700/80' : 'border-dark-750/50'
+                      } pointer-events-none`}
+                      style={{ left: `${frameNum * pxPerFrame}px` }}
+                    />
+                  );
+                });
+              })()}
+
+              {/* Global Playhead Vertical Line (Centered with translateX(-50%)) */}
               <div
                 className="absolute top-0 bottom-0 w-[2px] bg-red-500 pointer-events-none z-20 shadow-[0_0_8px_rgba(239,68,68,0.8)]"
-                style={{ left: `${currentFrame * pxPerFrame}px` }}
+                style={{
+                  left: `${currentFrame * pxPerFrame}px`,
+                  transform: 'translateX(-50%)',
+                }}
               />
 
               {/* Render lanes for each track */}

@@ -1,6 +1,6 @@
 {
   "name": "bb-sequencer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "3D Binaural Audio Sequencer combining DAW timeline and MMD keyframe 3D audio spatialization",
   "main": "dist-electron/main.js",
   "type": "module",

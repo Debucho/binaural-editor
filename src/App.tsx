@@ -92,7 +92,7 @@ const App: React.FC = () => {
           <span><kbd className="bg-dark-700 text-slate-300 px-1 py-0.2 rounded border border-dark-600">Shift+←/→</kbd> 5F移動</span>
         </div>
         <div className="text-slate-500">
-          Binaural Editor v1.0.0 | Web Audio API HRTF Engine
+          Binaural Editor v1.0.1 | Web Audio API HRTF Engine
         </div>
       </div>
     </div>

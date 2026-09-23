@@ -30,7 +30,7 @@ function createInitialState(): ProjectState {
   const initialTrackId = 'track-1';
   return {
     project: {
-      version: '1.0.0',
+      version: '1.0.1',
       name: 'Untitled Project',
       fps: 30,
       totalFrames: 900, // 30 seconds at 30fps
@@ -117,6 +117,29 @@ function runPlaybackLoop() {
   }
 
   animFrameId = requestAnimationFrame(runPlaybackLoop);
+}
+
+function calculateRequiredTotalFrames(tracks: Track[], currentTotal: number, fps: number): number {
+  let maxFrame = currentTotal;
+  for (const track of tracks) {
+    for (const clip of track.clips) {
+      const clipEnd = clip.startFrame + clip.durationFrames;
+      if (clipEnd > maxFrame) {
+        maxFrame = clipEnd;
+      }
+    }
+    for (const kf of track.keyframes) {
+      if (kf.frame > maxFrame) {
+        maxFrame = kf.frame;
+      }
+    }
+  }
+  if (maxFrame > currentTotal) {
+    // Add 3 seconds padding and round up to whole seconds
+    const padding = fps * 3;
+    return Math.max(900, Math.ceil((maxFrame + padding) / fps) * fps);
+  }
+  return currentTotal;
 }
 
 export const projectStore = {
@@ -213,11 +236,20 @@ export const projectStore = {
   },
 
   setTotalFrames: (totalFrames: number) => {
+    const minRequired = Math.max(30, state.project.fps * 1);
+    const newTotal = Math.max(minRequired, Math.round(totalFrames));
+    const newLoopEnd = Math.min(state.project.loop.endFrame, newTotal);
+
     state = {
       ...state,
+      currentFrame: Math.min(state.currentFrame, newTotal),
       project: {
         ...state.project,
-        totalFrames: Math.max(30, Math.round(totalFrames)),
+        totalFrames: newTotal,
+        loop: {
+          ...state.project.loop,
+          endFrame: newLoopEnd,
+        },
       },
     };
     emitChange();
@@ -377,11 +409,14 @@ export const projectStore = {
       return { ...t, clips: [...t.clips, newClip] };
     });
 
+    const newTotalFrames = calculateRequiredTotalFrames(updatedTracks, state.project.totalFrames, state.project.fps);
+
     state = {
       ...state,
       selectedClipId: newClip.id,
       project: {
         ...state.project,
+        totalFrames: newTotalFrames,
         tracks: updatedTracks,
       },
     };
@@ -398,10 +433,13 @@ export const projectStore = {
       };
     });
 
+    const newTotalFrames = calculateRequiredTotalFrames(updatedTracks, state.project.totalFrames, state.project.fps);
+
     state = {
       ...state,
       project: {
         ...state.project,
+        totalFrames: newTotalFrames,
         tracks: updatedTracks,
       },
     };
@@ -461,11 +499,14 @@ export const projectStore = {
       t.id === trackId ? { ...t, keyframes: updatedKeyframes } : t
     );
 
+    const newTotalFrames = calculateRequiredTotalFrames(updatedTracks, state.project.totalFrames, state.project.fps);
+
     state = {
       ...state,
       selectedKeyframeId: targetKfId,
       project: {
         ...state.project,
+        totalFrames: newTotalFrames,
         tracks: updatedTracks,
       },
     };
@@ -483,10 +524,13 @@ export const projectStore = {
       return { ...t, keyframes };
     });
 
+    const newTotalFrames = calculateRequiredTotalFrames(updatedTracks, state.project.totalFrames, state.project.fps);
+
     state = {
       ...state,
       project: {
         ...state.project,
+        totalFrames: newTotalFrames,
         tracks: updatedTracks,
       },
     };
@@ -521,12 +565,19 @@ export const projectStore = {
   loadProject: async (data: ProjectData) => {
     projectStore.stop();
     ramPreviewManager.invalidate();
+
+    const loadedTotal = calculateRequiredTotalFrames(data.tracks, data.totalFrames || 900, data.fps || 30);
+    const normalizedData = {
+      ...data,
+      totalFrames: loadedTotal,
+    };
+
     state = {
       ...state,
-      project: data,
+      project: normalizedData,
       currentFrame: 0,
-      selectedTrackId: data.tracks[0]?.id || null,
-      selectedKeyframeId: data.tracks[0]?.keyframes[0]?.id || null,
+      selectedTrackId: normalizedData.tracks[0]?.id || null,
+      selectedKeyframeId: normalizedData.tracks[0]?.keyframes[0]?.id || null,
       selectedClipId: null,
     };
 
@@ -608,4 +659,8 @@ export const projectStore = {
 
 export function useProjectStore(): ProjectState {
   return useSyncExternalStore(projectStore.subscribe, projectStore.getState);
+}
+
+if (typeof window !== 'undefined') {
+  (window as any).projectStore = projectStore;
 }

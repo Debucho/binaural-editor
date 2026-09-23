@@ -351,7 +351,23 @@ export const HeaderBar: React.FC = () => {
               {String(currentFrame).padStart(5, '0')}
             </span>
             <span className="text-slate-500">/</span>
-            <span className="text-slate-400 text-[11px]">{project.totalFrames}</span>
+            <input
+              type="number"
+              min={30}
+              step={30}
+              value={project.totalFrames}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val >= 30) {
+                  projectStore.setTotalFrames(val);
+                }
+              }}
+              title="プロジェクト総フレーム数（変更可能）"
+              className="w-14 bg-dark-800 text-slate-300 hover:text-white px-1 py-0.5 rounded text-[11px] font-mono outline-none border border-dark-700 hover:border-dark-600 focus:border-studio-accent text-center"
+            />
+            <span className="text-[10px] text-slate-400 font-mono" title="全体の総時間">
+              ({(project.totalFrames / project.fps).toFixed(1)}s)
+            </span>
           </div>
         </div>
 
